@@ -1,0 +1,215 @@
+FROM ubuntu:18.04
+MAINTAINER thewillonline
+
+# Configure Timezone
+ENV TZ 'Europe/Amsterdam'
+RUN echo $TZ > /etc/timezone && \
+apt-get update && apt-get install -y tzdata && \
+rm /etc/localtime && \
+ln -snf /usr/share/zoneinfo/$TZ /etc/localtime && \
+dpkg-reconfigure -f noninteractive tzdata && \
+apt-get clean
+
+
+
+# ENV TIMEZONE "Europe/Amsterdam"
+# RUN rm -f /etc/localtime && \
+#   ln -s "/usr/share/zoneinfo/${TIMEZONE}" /etc/localtime && \
+#   echo "${TIMEZONE}" > /etc/timezone
+
+#Adding repository for php7.3.4
+# ADD https://dl.bintray.com/php-alpine/key/php-alpine.rsa.pub /etc/apk/keys/php-alpine.rsa.pub
+
+# RUN apk --update-cache add ca-certificates && \
+    # echo "https://dl.bintray.com/php-alpine/v3.11/php-7.3" >> /etc/apk/repositories
+RUN apt-get update -y && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository -y ppa:ondrej/php && \
+    apt-add-repository multiverse && \
+    # apt-key adv --fetch-keys 'https://mariadb.org/mariadb_release_signing_key.asc' && \
+    # add-apt-repository 'deb [arch=amd64,arm64,ppc64el] https://mirror.zol.co.zw/mariadb/repo/10.5/ubuntu bionic main' && \
+    apt-get update -y && \
+    apt-get upgrade -y && \
+    apt autoremove -y
+    
+RUN apt-get install -y \
+  bash bwm-ng \
+  coreutils curl \
+  ffmpeg file findutils \
+  git \
+  htop \
+  iproute2 \
+  lame less \
+  make mariadb-client memcached musl \
+  nginx \
+  p7zip php7.3-ctype php7.3-curl php7.3-dev php7.3-exif php7.3-fpm php7.3-gd php7.3-iconv \
+  php7.3-imagick php7.3-json php7.0-mcrypt php7.3-opcache \
+  php7.3-pdo php7.3-phar php7.3-posix php7.3-redis php7.3-mbstring php7.3-mysql \
+  php7.3-simplexml php7.3-sockets php7.3-xmlwriter php7.3-xml php7.3-xmlreader php7.3-xmlrpc pigz libmcrypt-dev \
+  proxychains psmisc python3-pip python3 \
+  strace \
+  tar tig tree tzdata \
+  unrar unzip util-linux \
+  vim \
+  wget mediainfo \
+  zendframework
+
+#s6 installer
+ADD https://github.com/just-containers/s6-overlay/releases/download/v2.2.0.1/s6-overlay-amd64-installer /tmp/
+RUN chmod +x /tmp/s6-overlay-amd64-installer && ./tmp/s6-overlay-amd64-installer /
+
+# vnstat in testing repo
+
+# mytop + deps
+RUN apt-get -y install \
+  mariadb-server  \
+  perl \
+  libmysqlclient-dev \
+  libterm-readkey-perl
+
+# Install composer
+RUN curl https://getcomposer.org/installer | php7.3 -- --install-dir=/usr/bin --filename=composer --version=1.10.19
+
+# Build and install mediainfo
+# ENV MEDIAINFO_VERSION 20.09
+# RUN apt-get install gcc g++ && \
+#   mkdir -p /tmp && \
+#   cd /tmp && \
+#   curl -s -o mediainfo.tar.gz \
+#     https://mediaarea.net/download/binary/mediainfo/20.09/mediainfo_20.09-1_amd64.xUbuntu_18.04.deb && \
+#   tar xzvf mediainfo.tar.gz && \
+#   cd MediaInfo_CLI_GNU_FromSource && \
+#   ./CLI_Compile.sh && \
+#   cd MediaInfo/Project/GNU/CLI && \
+#   make install && \
+#   cd / && \
+#   rm -rf /tmp && \
+#   apt purge gcc g++
+
+# Install Python MySQL Modules
+RUN export LC_ALL="en_US.UTF-8"
+RUN pip3 install --upgrade pip && \
+  pip3 install --upgrade setuptools && \
+  pip3 install cymysql pynntp
+
+# Configure PHP
+RUN sed -ri 's/(max_execution_time =) ([0-9]+)/\1 120/' /etc/php/7.3/fpm/php.ini && \
+  sed -ri "s/(memory_limit =) (.*$)/\1 -1/" /etc/php/7.3/fpm/php.ini && \
+  sed -ri 's/;(date.timezone =)/\1 Europe\/Amsterdam/' /etc/php/7.3/fpm/php.ini && \
+  sed -ri 's/listen\s*=\s*127.0.0.1:9000/listen = 9000/g' /etc/php/7.3/fpm/pool.d/www.conf && \
+  sed -ri 's|;include_path = ".:/php/includes"|include_path = ".:/usr/share/php7.3"|g' /etc/php/7.3/fpm/php.ini && \
+  mkdir -p /var/log/php7.3-fpm/ && \
+  ln -sf /dev/stdout /var/log/php7.3-fpm.log && \
+  ln -s /usr/sbin/php-fpm7.3 /usr/sbin/php-fpm7
+
+# Install and configure nginx.
+RUN mkdir -p /var/log/nginx && \
+    mkdir -p /etc/nginx && \
+    mkdir -p /tmp/nginx && \
+    chmod 755 /var/log/nginx && \
+    chmod 777 /tmp && \
+    touch /var/log/nginx/nginx-error.log && \
+    ln -sf /dev/stderr /var/log/nginx/nginx-error.log &&\
+    ln -sf /dev/stdout /var/log/nginx/nginx-access.log
+
+# Clone nZEDb and set directory permissions
+ENV NZEDB_VERSION "0.x"
+RUN mkdir -p /var/www && \
+  cd /var/www && \
+  git clone https://github.com/nZEDb/nZEDb.git && \
+  cd /var/www/nZEDb && \
+  git checkout --quiet --force $NZEDB_VERSION && \
+  composer install --prefer-dist && \
+  chmod -R 777 /var/www/nZEDb/ && \
+  # nuke all git repos' .git dir except for nzedb's .git dir to save space
+  find . -name ".git" -type d | grep -v "\.\/\.git" | xargs rm -rf && \
+  # nuke ~350MB of composer cache
+  composer clear-cache
+
+# Build tmux 2.0 since tmux 2.2 has issues: https://github.com/nZEDb/nZEDb/issues/2182
+RUN apt install -y tmux
+# ENV TMUX_VERSION 3.1c
+# RUN apt-get install gcc g++ ncurses-dev libevent-dev bsd-compat-headers && \
+#   mkdir -p /tmp/tmux && \
+#   cd /tmp/tmux && \
+#   curl --location -o tmux.tar.gz https://github.com/tmux/tmux/releases/download/${TMUX_VERSION}/tmux-${TMUX_VERSION}.tar.gz && \
+#   tar xzvf tmux.tar.gz && \
+#   cd tmux-${TMUX_VERSION} && \
+#   ./configure --prefix /usr && \
+#   make && \
+#   make install && \
+#   cd / && \
+#   rm -rf /tmp/tmux && \
+#   apk del --purge gcc g++ ncurses-dev libevent-dev bsd-compat-headers && \
+#   rm -rf /var/cache/apk/*
+
+# Build and install php-yenc
+# ENV PHP_ZEPHIR_PARSER_VERSION v1.3.6
+# RUN cd /tmp && \
+#    apt-get install -y gcc re2c libc-dev  && \
+#   mkdir -p /tmp/zephir && \
+#   cd /tmp/zephir && \
+#   composer require phalcon/zephir && \
+#   cd /tmp && \
+#   git clone git://github.com/phalcon/php-zephir-parser.git && \
+#   cd php-zephir-parser && \
+#   git checkout --quiet --force $PHP_ZEPHIR_PARSER_VERSION && \
+#   # ./install && \
+#   phpize && \
+#   ./configure && \
+#   make && \
+#   make install && \
+#   echo "extension=zephir_parser.so" > /etc/php7.3/conf.d/98_zephir_parser.ini && \
+#   cd /tmp && \
+#   git clone https://github.com/niel/php-yenc.git && \
+#   cd php-yenc && \
+#   /tmp/zephir/vendor/bin/zephir install && \
+#   echo "extension=yenc.so" > /etc/php7.3/conf.d/99_yenc.ini && \
+#   composer clear-cache && \
+#   cd /tmp && \
+#   rm -rf zephir php-yenc php-zephir-parser && \
+#   apk del --purge gcc re2c libc-dev
+
+# Build and install par2
+# ENV PAR2_VERSION "v0.8.1"
+# RUN apt-get install gcc autoconf automake g++ python-dev openssl-dev libffi-dev && \
+#   git clone https://github.com/Parchive/par2cmdline.git /tmp/par2 && \
+#   cd /tmp/par2 && \
+#   git checkout --quiet --force $PAR2_VERSION && \
+#   ./automake.sh && \
+#   ./configure --prefix=/usr && \
+#   make && \
+#   make install && \
+#   cd / && \
+#   rm -rf /tmp/par2 && \
+#   apt remove --purge automake gcc autoconf g++ python-dev openssl-dev libffi-dev && \
+#    apt-get install libgomp
+RUN apt-get install -y par2
+#libgomp
+# Create dir for importing nzbs
+RUN mkdir -p /var/www/nZEDb/resources/import
+
+# Switch out php executable to instrument invocations
+RUN mv /usr/bin/php /usr/bin/php.real
+COPY php.proxy /usr/bin/php
+
+# Use pigz (parallel gzip) instead of gzip to speed up db backups
+RUN mv /bin/gzip /bin/gzip.real && \
+  ln -s /usr/bin/pigz /bin/gzip
+
+# iconv has issues in musl which affects NFO conversion to include
+# cool ascii chars. Remove the problematic parts - TRANSLIT and IGNORE
+# See https://github.com/slydetector/simply-nzedb/issues/31
+RUN sed -i "s|UTF-8//IGNORE//TRANSLIT|UTF-8|g" /var/www/nZEDb/nzedb/utility/Text.php
+
+LABEL nzedb=$NZEDB_VERSION \
+  maintainer=thewillonline \
+  url=https://github.com/wimjan123/simply-nzedb
+
+RUN mkdir -p /var/www/nZEDb/resources/tmp && chmod 777 /var/www/nZEDb/resources/tmp
+
+ENV TERM tmux
+EXPOSE 8800
+ADD s6 /etc/s6
+CMD ["/bin/s6-svscan","/etc/s6"]
+WORKDIR /var/www/nZEDb/misc/update
